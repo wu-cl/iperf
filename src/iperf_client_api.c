@@ -56,6 +56,11 @@ void *
 iperf_client_worker_run(void *s) {
     struct iperf_stream *sp = (struct iperf_stream *) s;
     struct iperf_test *test = sp->test;
+/*
+    if (sp->affinity >= 0) {
+        iperf_setaffinity_raw(sp->affinity);
+        printf("client worker stream affinity to %d\n", sp->affinity);
+    }*/
 
     /* Blocking signal to make sure that signal will be handled by main thread */
     sigset_t set;
@@ -112,67 +117,71 @@ iperf_create_streams(struct iperf_test *test, int sender)
 
     int orig_bind_port = test->bind_port;
     for (i = 0; i < test->num_streams; ++i) {
-
-        test->bind_port = orig_bind_port;
-	if (orig_bind_port) {
-	    test->bind_port += i;
-            // If Bidir make sure send and receive ports are different
-            if (!sender && test->mode == BIDIRECTIONAL)
-                test->bind_port += test->num_streams;
-        }
-        s = test->protocol->connect(test);
-        test->bind_port = orig_bind_port;
-        if (s < 0)
-            return -1;
+        iperf_affinity_once_wrapper_with_offset(i, {
+            printf("test point %d\n",i);
+            test->bind_port = orig_bind_port;
+            if (orig_bind_port) {
+                test->bind_port += i;
+                // If Bidir make sure send and receive ports are different
+                if (!sender && test->mode == BIDIRECTIONAL)
+                    test->bind_port += test->num_streams;
+            }
+            s = test->protocol->connect(test);
+            test->bind_port = orig_bind_port;
+            if (s < 0)
+                return -1;
 
 #if defined(HAVE_TCP_CONGESTION)
-	if (test->protocol->id == Ptcp) {
-	    if (test->congestion) {
-		if (setsockopt(s, IPPROTO_TCP, TCP_CONGESTION, test->congestion, strlen(test->congestion)) < 0) {
-		    saved_errno = errno;
-		    close(s);
-		    errno = saved_errno;
-		    i_errno = IESETCONGESTION;
-		    return -1;
-		}
-	    }
-	    {
-		socklen_t len = TCP_CA_NAME_MAX;
-		char ca[TCP_CA_NAME_MAX + 1];
-                int rc;
-		rc = getsockopt(s, IPPROTO_TCP, TCP_CONGESTION, ca, &len);
-                if (rc < 0 && test->congestion) {
-		    saved_errno = errno;
-		    close(s);
-		    errno = saved_errno;
-		    i_errno = IESETCONGESTION;
-		    return -1;
-		}
-	        if (test->congestion_used) {
-	          if (test->debug)
-	            printf("Overriding existing congestion algorithm: %s\n", test->congestion_used);
-	          free(test->congestion_used);
-	        }
-                // Set actual used congestion alg, or set to unknown if could not get it
-                if (rc < 0)
-                    test->congestion_used = strdup("unknown");
-                else
-                    test->congestion_used = strdup(ca);
-		if (test->debug) {
-		    printf("Congestion algorithm is %s\n", test->congestion_used);
-		}
-	    }
-	}
+            if (test->protocol->id == Ptcp) {
+                if (test->congestion) {
+                    if (setsockopt(s, IPPROTO_TCP, TCP_CONGESTION, test->congestion, strlen(test->congestion)) < 0) {
+                        saved_errno = errno;
+                        close(s);
+                        errno = saved_errno;
+                        i_errno = IESETCONGESTION;
+                        return -1;
+                    }
+                }
+                {
+                    socklen_t len = TCP_CA_NAME_MAX;
+                    char ca[TCP_CA_NAME_MAX + 1];
+                    int rc;
+                    rc = getsockopt(s, IPPROTO_TCP, TCP_CONGESTION, ca, &len);
+                    if (rc < 0 && test->congestion) {
+                        saved_errno = errno;
+                        close(s);
+                        errno = saved_errno;
+                        i_errno = IESETCONGESTION;
+                        return -1;
+                    }
+                    if (test->congestion_used) {
+                        if (test->debug)
+                            printf("Overriding existing congestion algorithm: %s\n", test->congestion_used);
+                        free(test->congestion_used);
+                    }
+                    // Set actual used congestion alg, or set to unknown if could not get it
+                    if (rc < 0)
+                        test->congestion_used = strdup("unknown");
+                    else
+                        test->congestion_used = strdup(ca);
+                    if (test->debug) {
+                        printf("Congestion algorithm is %s\n", test->congestion_used);
+                    }
+                }
+            }
 #endif /* HAVE_TCP_CONGESTION */
 
-        sp = iperf_new_stream(test, s, sender);
-        if (!sp)
-            return -1;
+            sp = iperf_new_stream(test, s, sender);
+            if (!sp)
+                return -1;
 
-        /* Perform the new stream callback */
-        if (test->on_new_stream)
-            test->on_new_stream(sp);
+            /* Perform the new stream callback */
+            if (test->on_new_stream)
+                test->on_new_stream(sp);
     }
+
+        // iperf_setaffinity_streams(test);
+    })
 
     return 0;
 }

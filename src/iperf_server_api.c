@@ -70,6 +70,12 @@ iperf_server_worker_run(void *s) {
     struct iperf_stream *sp = (struct iperf_stream *) s;
     struct iperf_test *test = sp->test;
 
+/*
+    if (sp->affinity >= 0) {
+        iperf_setaffinity_raw(sp->affinity);
+        printf("server worker stream affinity to %d\n", sp->affinity);
+    }*/
+
     /* Blocking signal to make sure that signal will be handled by main thread */
     sigset_t set;
     sigemptyset(&set);
@@ -905,6 +911,8 @@ iperf_run_server(struct iperf_test *test)
                         i_errno = IEPTHREADATTRINIT;
                         cleanup_server(test);
                     };
+
+                    iperf_setaffinity_streams(test);
 
                     SLIST_FOREACH(sp, &test->streams, streams) {
                         if (pthread_create(&(sp->thr), &attr, &iperf_server_worker_run, sp) != 0) {

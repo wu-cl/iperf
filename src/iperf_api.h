@@ -370,8 +370,18 @@ int iperf_json_start(struct iperf_test *);
 int iperf_json_finish(struct iperf_test *);
 
 /* CPU affinity routines */
+void iperf_setaffinity_streams(struct iperf_test *test);
+int iperf_getaffinity_with_offset(int offset);
+int iperf_setaffinity_raw(int affinity);
 int iperf_setaffinity(struct iperf_test *, int affinity);
 int iperf_clearaffinity(struct iperf_test *);
+#define iperf_affinity_once_wrapper_with_offset(offset, statements)  \
+    int affinity = iperf_getaffinity_with_offset(offset); \
+    if (affinity >= 0){ \
+        iperf_setaffinity_raw(affinity); \
+    } \
+    statements \
+    iperf_setaffinity_raw(0);
 
 /* Custom printf routine. */
 int iperf_printf(struct iperf_test *test, const char *format, ...) __attribute__ ((format(printf,2,3)));

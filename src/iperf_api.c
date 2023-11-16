@@ -4544,6 +4544,7 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
 
     memset(sp, 0, sizeof(struct iperf_stream));
 
+    //sp->affinity = -1;
     sp->sender = sender;
     sp->test = test;
     sp->settings = test->settings;
@@ -5053,9 +5054,76 @@ iperf_json_finish(struct iperf_test *test)
 
 
 /* CPU affinity stuff - Linux, FreeBSD, and Windows only. */
+cpu_set_t *
+iperf_getaffinity_mask()
+{
+#if defined(HAVE_SCHED_SETAFFINITY)
+    static cpu_set_t cpu_set;
+    if (sched_getaffinity(0, sizeof(cpu_set_t), &cpu_set) != 0) {
+        return NULL;
+    }
+#elif defined(HAVE_CPUSET_SETAFFINITY)
+    static cpuset_t cpu_set;
+    if (cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, -1, sizeof(cpuset_t), &cpumask) != 0) {
+        return NULL;
+    }
+#else
+    return NULL;
+#endif
+    return &cpu_set;
+}
+
+/*
+
+*/
+int
+iperf_getaffinity_with_offset(int offset)
+{
+    printf("iperf_getaffinity_with_offse: %d\n",offset);
+    cpu_set_t *cpu_set_p = iperf_getaffinity_mask();
+    if (cpu_set_p == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < CPU_SETSIZE; i++) {
+        if (CPU_ISSET(i, cpu_set_p)) {
+            if (offset == 0) {
+                return i;
+            }
+            offset--;
+        }
+    }
+    return -1;
+}
+
+
+
+void
+iperf_setaffinity_streams(struct iperf_test *test)
+{
+    cpu_set_t *cpu_set_p = iperf_getaffinity_mask();
+    if (cpu_set_p == NULL) {
+        return;
+    }
+    int available_cpu_num = CPU_COUNT(cpu_set_p);
+    int affinity_stream_cnt = 0;
+    if (available_cpu_num > 0) {
+        affinity_stream_cnt = (test->num_streams / available_cpu_num) * available_cpu_num;
+    }
+
+    int index = 0;
+    struct iperf_stream *sp;
+    SLIST_FOREACH(sp, &test->streams, streams)
+    {
+        if (affinity_stream_cnt > 0) {
+            //sp->affinity = iperf_getaffinity_with_offset(index % available_cpu_num);
+            affinity_stream_cnt--;
+        }
+        index++;
+    }
+}
 
 int
-iperf_setaffinity(struct iperf_test *test, int affinity)
+iperf_setaffinity_raw(int affinity)
 {
 #if defined(HAVE_SCHED_SETAFFINITY)
     cpu_set_t cpu_set;
@@ -5063,28 +5131,20 @@ iperf_setaffinity(struct iperf_test *test, int affinity)
     CPU_ZERO(&cpu_set);
     CPU_SET(affinity, &cpu_set);
     if (sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) != 0) {
-	i_errno = IEAFFINITY;
-        return -1;
-    }
-    return 0;
-#elif defined(HAVE_CPUSET_SETAFFINITY)
-    cpuset_t cpumask;
-
-    if(cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, -1,
-                          sizeof(cpuset_t), &test->cpumask) != 0) {
         i_errno = IEAFFINITY;
         return -1;
     }
+    printf("affinity to %d\n", affinity);
+#elif defined(HAVE_CPUSET_SETAFFINITY)
+    cpuset_t cpumask;
 
     CPU_ZERO(&cpumask);
     CPU_SET(affinity, &cpumask);
-
     if(cpuset_setaffinity(CPU_LEVEL_WHICH,CPU_WHICH_PID, -1,
                           sizeof(cpuset_t), &cpumask) != 0) {
         i_errno = IEAFFINITY;
         return -1;
     }
-    return 0;
 #elif defined(HAVE_SETPROCESSAFFINITYMASK)
 	HANDLE process = GetCurrentProcess();
 	DWORD_PTR processAffinityMask = 1 << affinity;
@@ -5093,11 +5153,67 @@ iperf_setaffinity(struct iperf_test *test, int affinity)
 		i_errno = IEAFFINITY;
 		return -1;
 	}
-	return 0;
 #else /* neither HAVE_SCHED_SETAFFINITY nor HAVE_CPUSET_SETAFFINITY nor HAVE_SETPROCESSAFFINITYMASK */
     i_errno = IEAFFINITY;
     return -1;
 #endif /* neither HAVE_SCHED_SETAFFINITY nor HAVE_CPUSET_SETAFFINITY nor HAVE_SETPROCESSAFFINITYMASK */
+    return 0;
+}
+
+int
+iperf_affinity_save_init(struct iperf_test *test)
+{
+#if defined(HAVE_SCHED_SETAFFINITY)
+    if (sched_getaffinity(0, sizeof(cpu_set_t), &test->cpumask_init) != 0) {
+        goto err_ret;
+    }
+#elif defined(HAVE_CPUSET_SETAFFINITY)
+    if (cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, -1, sizeof(cpuset_t), &test->cpumask_init) != 0) {
+        goto err_ret;
+    }
+#elif defined(HAVE_SETPROCESSAFFINITYMASK)
+    DWORD_PTR processAffinityMask;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &processAffinityMask, &test->cpumask_init) != 0) {
+        goto err_ret;
+    }
+#endif
+    return 0;
+err_ret:
+    i_errno = IEAFFINITY;
+    return -1;
+}
+
+int
+iperf_affinity_save(struct iperf_test *test)
+{
+#if defined(HAVE_SCHED_SETAFFINITY)
+    if (sched_getaffinity(0, sizeof(cpu_set_t), &test->cpumask_with_affinity) != 0) {
+        goto err_ret;
+    }
+#elif defined(HAVE_CPUSET_SETAFFINITY)
+    if (cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, -1, sizeof(cpuset_t), &test->cpumask_with_affinity) != 0) {
+        goto err_ret;
+    }
+#elif defined(HAVE_SETPROCESSAFFINITYMASK)
+    DWORD_PTR processAffinityMask;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &processAffinityMask, &test->cpumask_with_affinity) != 0) {
+        goto err_ret;
+    }
+#endif
+    return 0;
+err_ret:
+    i_errno = IEAFFINITY;
+    return -1;
+}
+
+int
+iperf_setaffinity(struct iperf_test *test, int affinity)
+{
+    int ret = iperf_affinity_save(test);
+    if (ret < 0) {
+        return ret;
+    }
+    return iperf_setaffinity_raw(affinity);
 }
 
 int
@@ -5110,8 +5226,8 @@ iperf_clearaffinity(struct iperf_test *test)
     CPU_ZERO(&cpu_set);
     for (i = 0; i < CPU_SETSIZE; ++i)
 	CPU_SET(i, &cpu_set);
-    if (sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) != 0) {
-	i_errno = IEAFFINITY;
+    if (sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) == 0) {
+        i_errno = IEAFFINITY;
         return -1;
     }
     return 0;
@@ -5124,11 +5240,7 @@ iperf_clearaffinity(struct iperf_test *test)
     return 0;
 #elif defined(HAVE_SETPROCESSAFFINITYMASK)
 	HANDLE process = GetCurrentProcess();
-	DWORD_PTR processAffinityMask;
-	DWORD_PTR lpSystemAffinityMask;
-
-	if (GetProcessAffinityMask(process, &processAffinityMask, &lpSystemAffinityMask) == 0
-			|| SetProcessAffinityMask(process, lpSystemAffinityMask) == 0) {
+	if (SetProcessAffinityMask(process, &test->lpSystemAffinityMask) == 0) {
 		i_errno = IEAFFINITY;
 		return -1;
 	}
