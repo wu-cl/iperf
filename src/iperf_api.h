@@ -370,6 +370,9 @@ int iperf_json_start(struct iperf_test *);
 int iperf_json_finish(struct iperf_test *);
 
 /* CPU affinity routines */
+int iperf_getaffinity_cpu_num();
+int iperf_getaffinity_by_offset(int offset);
+int iperf_setaffinity_raw(int affinity);
 int iperf_setaffinity(struct iperf_test *, int affinity);
 int iperf_clearaffinity(struct iperf_test *);
 
