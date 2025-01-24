@@ -60,6 +60,8 @@ iperf_client_worker_run(void *s) {
     struct iperf_stream *sp = (struct iperf_stream *) s;
     struct iperf_test *test = sp->test;
 
+    sched_setaffinity(0,sizeof(cpu_set_t),&sp->cpu_set);
+
     /* Blocking signal to make sure that signal will be handled by main thread */
     sigset_t set;
     sigemptyset(&set);
@@ -176,6 +178,8 @@ iperf_create_streams(struct iperf_test *test, int sender)
         sp = iperf_new_stream(test, s, sender);
         if (!sp)
             return -1;
+        
+        sp->cpu_set = t_mask;
 
         /* Perform the new stream callback */
         if (test->on_new_stream)

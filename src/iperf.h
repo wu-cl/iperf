@@ -215,6 +215,7 @@ struct iperf_stream
     int       pending_size;     /* pending data to send */
     int       diskfile_fd;	/* file to send, file descriptor */
     int	      diskfile_left;	/* remaining file data on disk */
+    cpu_set_t cpu_set;
 
     /*
      * for udp measurements - This can be a structure outside stream, and
